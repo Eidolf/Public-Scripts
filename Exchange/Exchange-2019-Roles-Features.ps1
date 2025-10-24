@@ -39,7 +39,7 @@ $requiredFeatures = @(
     "RSAT-ADDS"
 )
 
-# Prüfen, welche Features bereits installiert sind
+# Pruefen, welche Features bereits installiert sind
 $installedFeatures = Get-WindowsFeature | Where-Object { $_.Installed } | Select-Object -ExpandProperty Name
 
 # Fehlende Features ermitteln
@@ -53,11 +53,11 @@ if ($missingFeatures.Count -eq 0) {
     $missingFeatures | ForEach-Object { Write-Host "- $_" }
 
     # Optional: Installation anbieten
-    $install = Read-Host "Möchtest du die fehlenden Features jetzt installieren? (J/N)"
+    $install = Read-Host "Moechtest du die fehlenden Features jetzt installieren? (J/N)"
     if ($install -eq "J") {
         Install-WindowsFeature -Name $missingFeatures
-        Write-Host "Installation abgeschlossen. Starte ggf. den Server oder führe 'iisreset' aus." -ForegroundColor Green
+        Write-Host "Installation abgeschlossen. Starte ggf. den Server oder fuehre 'iisreset' aus." -ForegroundColor Green
     } else {
-        Write-Host "Installation abgebrochen. Du kannst die Features später manuell installieren." -ForegroundColor Red
+        Write-Host "Installation abgebrochen. Du kannst die Features spaeter manuell installieren." -ForegroundColor Red
     }
 }
