@@ -25,7 +25,6 @@ $requiredFeatures = @(
     "Web-Http-Tracing",
     "Web-ISAPI-Ext",
     "Web-ISAPI-Filter",
-    "Web-Lgcy-Mgmt-Console",
     "Web-Metabase",
     "Web-Mgmt-Console",
     "Web-Mgmt-Service",
