@@ -1,3 +1,21 @@
+ <#
+    .SYNOPSIS
+        Script Name:    Exchange-2019-Roles-Features
+        Created on:     26.10.2025
+        Changed on:     
+        Created by:     Eidolf
+        Changed by:
+        Company:        ER-Netz
+        Version:        1.0.0
+    .DESCRIPTION
+        Script to install all required Features for Exchange 2019
+    .EXAMPLE
+        Exchange-2019-Roles-Features.ps1
+    .LINK
+#>
+
+#requires -Version 5.1
+
 # Liste der empfohlenen Features für Exchange Server 2019
 $requiredFeatures = @(
     "Server-Media-Foundation",
