@@ -3,11 +3,11 @@
     .SYNOPSIS
         Script Name:    Exchange Migration Script  
         Created on:     17.11.2025
-        Changed on:     18.11.2025
+        Changed on:     25.11.2025
         Created by:     Eidolf (with help of Copilot AI)
         Changed by:
         Company:        ER-Netz
-        Version:        1.1.0
+        Version:        1.1.1
     .DESCRIPTION
         A Script for migrating Exchange Server 2016 to Server 2019/SE. Primary for Database creation and move and comparing settings between Servers.
         Version 1.0.0 is a working Version for Database Migration and to check settings.
@@ -161,7 +161,7 @@ param(
 )
 
 function Test-ExchangeEnvironment { 
-    Write-Host "Exchange Migration Script v3.3.12 started..." -ForegroundColor Cyan; if (-not (Get-Command Get-ExchangeServer -ErrorAction SilentlyContinue)) 
+    Write-Host "Exchange Migration Script started..." -ForegroundColor Cyan; if (-not (Get-Command Get-ExchangeServer -ErrorAction SilentlyContinue)) 
     { Write-Warning "Run inside Exchange Management Shell!"; return $false } return $true 
 }
 function Get-ExchangeServerVersions { 
