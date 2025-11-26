@@ -3,11 +3,11 @@
     .SYNOPSIS
         Script Name:    Exchange Migration Script  
         Created on:     17.11.2025
-        Changed on:     25.11.2025
+        Changed on:     26.11.2025
         Created by:     Eidolf (with help of Copilot AI)
         Changed by:
         Company:        ER-Netz
-        Version:        1.1.1
+        Version:        1.1.2
     .DESCRIPTION
         A Script for migrating Exchange Server 2016 to Server 2019/SE. Primary for Database creation and move and comparing settings between Servers.
         Version 1.0.0 is a working Version for Database Migration and to check settings.
@@ -112,13 +112,12 @@ Zusatzoptionen (CAS)
 
 
 [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='Medium')]
+[CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='Medium')]
 param(
     [string]$SourceVersion = '15.1',
     [string]$TargetVersion = '15.2',
-
     [ValidateSet('MirrorSource','BasePerDb')]
     [string]$PathMode = 'MirrorSource',
-
     [string]$DbBase='E:\\Datenbanken',
     [string]$LogBase='E:\\Logs',
     [hashtable]$DriveMap,
@@ -149,15 +148,15 @@ param(
     [string]$ExportPlan,
     [string]$ExportDiffs,
 
-    
-# CAS URLs
-[switch]$CompareCasUrls,
-[switch]$ApplyCasUrls,
-[string]$SourceCasServer,
-[string]$TargetCasServer,
-[switch]$CasShowAll,
-# Debug
-    [switch]$DebugOAB
+    # Debug
+    [switch]$DebugOAB,
+
+    # CAS URLs
+    [switch]$CompareCasUrls,
+    [switch]$ApplyCasUrls,
+    [string]$SourceCasServer,
+    [string]$TargetCasServer,
+    [switch]$CasShowAll
 )
 
 function Test-ExchangeEnvironment { 
@@ -441,171 +440,234 @@ function Queue-DatabaseMoves([string]$sourceDb,[string]$targetDb,[string]$batchP
 if(-not (Test-ExchangeEnvironment)){ return }
 
 
-function Test-IsAbsoluteHttpUrl {
-    [CmdletBinding()] param([string]$Url)
-    if ([string]::IsNullOrWhiteSpace($Url)) { return $false }
-    try { $u = [Uri]$Url; return ($u.Scheme -in @('http','https') -and $u.IsAbsoluteUri) } catch { return $false }
+function Test-IsAbsoluteHttpUrl { 
+    param([string]$Url) 
+    if ([string]::IsNullOrWhiteSpace($Url)) { 
+        return $false 
+    } 
+    try { $u=[Uri]$Url; 
+        return ($u.Scheme -in @('http','https') -and $u.IsAbsoluteUri) 
+    } 
+    catch { 
+        return $false 
+    } 
 }
-function Get-HostFromUrl { [CmdletBinding()] param([string]$Url) try { return ([Uri]$Url).Host } catch { return $null } }
-function Test-ServerBoundUrl {
-    [CmdletBinding()] param([string]$Url, [string]$SourceServerName)
-    if ([string]::IsNullOrWhiteSpace($Url) -or [string]::IsNullOrWhiteSpace($SourceServerName)) { return $false }
-    $urlHost = Get-HostFromUrl -Url $Url
-    if (-not $urlHost) { return $false }
-    $short = ($SourceServerName -split '\.')[0]
-    return ($urlHost -ieq $SourceServerName -or $urlHost -ieq $short -or $urlHost -like ($short + '.*'))
+function Get-HostFromUrl { 
+    param([string]$Url) 
+    try { 
+        return ([Uri]$Url).Host 
+    } 
+    catch { 
+        return $null 
+    } 
+}
+function Test-ServerBoundUrl { 
+    param([string]$Url,[string]$SourceServerName) 
+    if ([string]::IsNullOrWhiteSpace($Url) -or [string]::IsNullOrWhiteSpace($SourceServerName)) { 
+        return $false 
+    } 
+    $urlHost=Get-HostFromUrl -Url $Url; 
+    if (-not $urlHost){
+        return $false
+    } 
+    $short=($SourceServerName -split '\.')[0]; 
+    return ($urlHost -ieq $SourceServerName -or $urlHost -ieq $short -or $urlHost -like ($short+'.*')) 
 }
 
-function Get-CasUrlSnapshot {
-<##
-.SYNOPSIS
-    Ermittelt CAS-/VirtualDirectory-URLs eines Exchange-Servers.
-.PARAMETER Server
-    Servername (FQDN oder NetBIOS) des Exchange-Servers.
-#>
-    [CmdletBinding()] param([Parameter(Mandatory)][string]$Server)
-    $snap = [ordered]@{
-        Server = $Server
-        AutoDiscoverServiceInternalUri = $null
-        OWA_InternalUrl = $null; OWA_ExternalUrl = $null
-        ECP_InternalUrl = $null; ECP_ExternalUrl = $null
-        EWS_InternalUrl = $null; EWS_ExternalUrl = $null
-        EAS_InternalUrl = $null; EAS_ExternalUrl = $null
-        OAB_InternalUrl = $null; OAB_ExternalUrl = $null
-        MAPI_InternalUrl = $null; MAPI_ExternalUrl = $null
-        OutlookAnywhere_InternalHostname = $null; OutlookAnywhere_ExternalHostname = $null
+function Get-CasUrlSnapshot { 
+    param([string]$Server) 
+    $snap=[ordered]@{
+        Server=$Server;
+        AutoDiscoverServiceInternalUri=$null;
+        OWA_InternalUrl=$null;
+        OWA_ExternalUrl=$null;
+        ECP_InternalUrl=$null;
+        ECP_ExternalUrl=$null;
+        EWS_InternalUrl=$null;
+        EWS_ExternalUrl=$null;
+        EAS_InternalUrl=$null;
+        EAS_ExternalUrl=$null;
+        OAB_InternalUrl=$null;
+        OAB_ExternalUrl=$null;
+        MAPI_InternalUrl=$null;
+        MAPI_ExternalUrl=$null;
+        OutlookAnywhere_InternalHostname=$null;
+        OutlookAnywhere_ExternalHostname=$null
+    } 
+    try{
+        $cas=Get-ClientAccessService -Identity $Server;
+        $snap.AutoDiscoverServiceInternalUri=[string]$cas.AutoDiscoverServiceInternalUri
     }
-    try { $cas = Get-ClientAccessService -Identity $Server -ErrorAction Stop; $snap.AutoDiscoverServiceInternalUri = [string]$cas.AutoDiscoverServiceInternalUri } catch {}
-    try { $x = Get-OwaVirtualDirectory -Server $Server -ErrorAction Stop; $snap.OWA_InternalUrl=[string]$x.InternalUrl; $snap.OWA_ExternalUrl=[string]$x.ExternalUrl } catch {}
-    try { $x = Get-EcpVirtualDirectory -Server $Server -ErrorAction Stop; $snap.ECP_InternalUrl=[string]$x.InternalUrl; $snap.ECP_ExternalUrl=[string]$x.ExternalUrl } catch {}
-    try { $x = Get-WebServicesVirtualDirectory -Server $Server -ErrorAction Stop; $snap.EWS_InternalUrl=[string]$x.InternalUrl; $snap.EWS_ExternalUrl=[string]$x.ExternalUrl } catch {}
-    try { $x = Get-ActiveSyncVirtualDirectory -Server $Server -ErrorAction Stop; $snap.EAS_InternalUrl=[string]$x.InternalUrl; $snap.EAS_ExternalUrl=[string]$x.ExternalUrl } catch {}
-    try { $x = Get-OabVirtualDirectory -Server $Server -ErrorAction Stop; $snap.OAB_InternalUrl=[string]$x.InternalUrl; $snap.OAB_ExternalUrl=[string]$x.ExternalUrl } catch {}
-    try { $x = Get-MapiVirtualDirectory -Server $Server -ErrorAction Stop; $snap.MAPI_InternalUrl=[string]$x.InternalUrl; $snap.MAPI_ExternalUrl=[string]$x.ExternalUrl } catch {}
-    try { $x = Get-OutlookAnywhere -Server $Server -ErrorAction Stop; $snap.OutlookAnywhere_InternalHostname=[string]$x.InternalHostname; $snap.OutlookAnywhere_ExternalHostname=[string]$x.ExternalHostname } catch {}
-    [pscustomobject]$snap
+    catch{}
+    try{$x=Get-OwaVirtualDirectory -Server $Server;
+        $snap.OWA_InternalUrl=[string]$x.InternalUrl;
+        $snap.OWA_ExternalUrl=[string]$x.ExternalUrl
+    }
+    catch{} 
+    try{$x=Get-EcpVirtualDirectory -Server $Server;
+        $snap.ECP_InternalUrl=[string]$x.InternalUrl;
+        $snap.ECP_ExternalUrl=[string]$x.ExternalUrl
+    }
+    catch{} 
+    try{$x=Get-WebServicesVirtualDirectory -Server $Server;
+        $snap.EWS_InternalUrl=[string]$x.InternalUrl;
+        $snap.EWS_ExternalUrl=[string]$x.ExternalUrl
+    }
+    catch{} 
+    try{$x=Get-ActiveSyncVirtualDirectory -Server $Server;
+        $snap.EAS_InternalUrl=[string]$x.InternalUrl;
+        $snap.EAS_ExternalUrl=[string]$x.ExternalUrl
+    }
+    catch{} 
+    try{$x=Get-OabVirtualDirectory -Server $Server;
+        $snap.OAB_InternalUrl=[string]$x.InternalUrl;
+        $snap.OAB_ExternalUrl=[string]$x.ExternalUrl
+    }
+    catch{} 
+    try{$x=Get-MapiVirtualDirectory -Server $Server;
+        $snap.MAPI_InternalUrl=[string]$x.InternalUrl;
+        $snap.MAPI_ExternalUrl=[string]$x.ExternalUrl
+    }
+    catch{} 
+    try{$x=Get-OutlookAnywhere -Server $Server;
+        $snap.OutlookAnywhere_InternalHostname=[string]$x.InternalHostname;
+        $snap.OutlookAnywhere_ExternalHostname=[string]$x.ExternalHostname
+    }
+    catch{} 
+    [pscustomobject]$snap 
 }
 
-function Compare-CasUrls {
+function Compare-CasUrls { 
 <##
 .SYNOPSIS
     Vergleicht CAS-/VD-URLs zwischen Quelle und Ziel.
 #>
-    [CmdletBinding()] param(
-        [Parameter(Mandatory)][psobject]$Source,
-        [Parameter(Mandatory)][psobject]$Target,
+    param(
+        [psobject]$Source,
+        [psobject]$Target,
         [switch]$CasShowAll,
         [string]$SourceServerName,
         [string]$TargetServerName
-    )
-    $props = 'AutoDiscoverServiceInternalUri','OWA_InternalUrl','OWA_ExternalUrl','ECP_InternalUrl','ECP_ExternalUrl','EWS_InternalUrl','EWS_ExternalUrl','EAS_InternalUrl','EAS_ExternalUrl','OAB_InternalUrl','OAB_ExternalUrl','MAPI_InternalUrl','MAPI_ExternalUrl','OutlookAnywhere_InternalHostname','OutlookAnywhere_ExternalHostname'
-    $rows = @()
-    foreach ($p in $props) {
-        $sv = [string]$Source.$p
-        $tv = [string]$Target.$p
-        $equal = ($sv -eq $tv)
-        $bothEmpty = ([string]::IsNullOrWhiteSpace($sv) -and [string]::IsNullOrWhiteSpace($tv))
-        $note = $null
-        if ($p -like '*Url' -and (Test-ServerBoundUrl -Url $sv -SourceServerName $SourceServerName)) {
-            $note = 'ServerBound(Source) – manual adjust recommended'
-        }
-        if (-not $equal -or $CasShowAll) {
-            $status = if (-not $equal) { 'Different' } elseif ($bothEmpty) { 'Equal (BothEmpty)' } else { 'Equal' }
-            $rows += [pscustomobject]@{ Property=$p; SourceValue=$sv; TargetValue=$tv; Status=$status; Note=$note }
-        }
-    }
-    return ,$rows
+        ) 
+        $props='AutoDiscoverServiceInternalUri','OWA_InternalUrl','OWA_ExternalUrl','ECP_InternalUrl','ECP_ExternalUrl','EWS_InternalUrl','EWS_ExternalUrl','EAS_InternalUrl','EAS_ExternalUrl','OAB_InternalUrl','OAB_ExternalUrl','MAPI_InternalUrl','MAPI_ExternalUrl','OutlookAnywhere_InternalHostname','OutlookAnywhere_ExternalHostname';
+        $rows=@();foreach($p in $props){
+            $sv=[string]$Source.$p;
+            $tv=[string]$Target.$p;
+            $equal=($sv -eq $tv);
+            $bothEmpty=([string]::IsNullOrWhiteSpace($sv)-and[string]::IsNullOrWhiteSpace($tv));
+            $note=$null;
+            if($p -like '*Url'-and(Test-ServerBoundUrl -Url $sv -SourceServerName $SourceServerName)){
+                $note='ServerBound(Source) – manual adjust recommended'
+            }
+            if(-not $equal -or $CasShowAll){
+                $status=if(-not $equal){
+                    'Different'
+                }
+                elseif($bothEmpty){
+                    'Equal (BothEmpty)'
+                }
+                else{'Equal'};
+                $rows+=[pscustomobject]@{
+                    Property=$p;
+                    SourceValue=$sv;
+                    TargetValue=$tv;
+                    Status=$status;
+                    Note=$note
+                }
+            }
+        };
+    ,$rows 
 }
 
-function Apply-CasUrls {
+function Apply-CasUrls { 
 <##
 .SYNOPSIS
     Übernimmt CAS-/VD-URLs vom Snapshot auf den Zielserver (nur valide, nicht servergebunden).
 #>
-    [CmdletBinding(SupportsShouldProcess)] param(
-        [Parameter(Mandatory)][string]$TargetServer,
-        [Parameter(Mandatory)][psobject]$SourceSnapshot
-    )
-    function _Apply-VD {
-        param([string]$VDir,[string]$CmdGet,[string]$CmdSet,[string]$IntProp='InternalUrl',[string]$ExtProp='ExternalUrl')
-        if ($PSCmdlet.ShouldProcess($TargetServer,$CmdSet)) {
-            $setParams = @{}
-            $int = $SourceSnapshot["${VDir}_InternalUrl"]
-            $ext = $SourceSnapshot["${VDir}_ExternalUrl"]
-            if (-not [string]::IsNullOrWhiteSpace($int)) {
-                if (Test-ServerBoundUrl -Url $int -SourceServerName $TargetServer) {
-                    Write-Host "Skip $VDir InternalUrl (serverbound to source): $int" -ForegroundColor DarkYellow
-                } elseif (Test-IsAbsoluteHttpUrl $int) {
-                    $setParams[$IntProp] = $int
-                } else {
-                    Write-Host "Skip $VDir InternalUrl (invalid/relative): '$int'" -ForegroundColor DarkYellow
-                }
-            }
-            if (-not [string]::IsNullOrWhiteSpace($ext)) {
-                if (Test-IsAbsoluteHttpUrl $ext) { $setParams[$ExtProp] = $ext }
-                else { Write-Host "Skip $VDir ExternalUrl (invalid/relative): '$ext'" -ForegroundColor DarkYellow }
-            }
-            if ($setParams.Count -gt 0) {
-                try { & $CmdGet -Server $TargetServer -ErrorAction Stop | & $CmdSet @setParams -Confirm:$false } catch {}
-            }
-        }
+    param(
+        [string]$TargetServer,
+        [psobject]$SourceSnapshot
+        ) 
+    # OWA
+    if(Test-IsAbsoluteHttpUrl $SourceSnapshot.OWA_InternalUrl -and -not(Test-ServerBoundUrl -Url $SourceSnapshot.OWA_InternalUrl -SourceServerName $TargetServer)){
+        Get-OwaVirtualDirectory -Server $TargetServer|Set-OwaVirtualDirectory -InternalUrl $SourceSnapshot.OWA_InternalUrl -ExternalUrl $SourceSnapshot.OWA_ExternalUrl -Confirm:$false
     }
-    _Apply-VD -VDir 'OWA' -CmdGet 'Get-OwaVirtualDirectory' -CmdSet 'Set-OwaVirtualDirectory'
-    _Apply-VD -VDir 'ECP' -CmdGet 'Get-EcpVirtualDirectory' -CmdSet 'Set-EcpVirtualDirectory'
-    _Apply-VD -VDir 'EWS' -CmdGet 'Get-WebServicesVirtualDirectory' -CmdSet 'Set-WebServicesVirtualDirectory'
-    _Apply-VD -VDir 'EAS' -CmdGet 'Get-ActiveSyncVirtualDirectory' -CmdSet 'Set-ActiveSyncVirtualDirectory'
-    _Apply-VD -VDir 'OAB' -CmdGet 'Get-OabVirtualDirectory' -CmdSet 'Set-OabVirtualDirectory'
-    _Apply-VD -VDir 'MAPI' -CmdGet 'Get-MapiVirtualDirectory' -CmdSet 'Set-MapiVirtualDirectory'
-
+    else{
+        Write-Host "Skip OWA InternalUrl (invalid or serverbound): '$($SourceSnapshot.OWA_InternalUrl)'" -ForegroundColor DarkYellow
+    } 
+    # ECP
+    if(Test-IsAbsoluteHttpUrl $SourceSnapshot.ECP_InternalUrl -and -not(Test-ServerBoundUrl -Url $SourceSnapshot.ECP_InternalUrl -SourceServerName $TargetServer)){
+        Get-EcpVirtualDirectory -Server $TargetServer|Set-EcpVirtualDirectory -InternalUrl $SourceSnapshot.ECP_InternalUrl -ExternalUrl $SourceSnapshot.ECP_ExternalUrl -Confirm:$false
+    }
+    else{
+        Write-Host "Skip ECP InternalUrl (invalid or serverbound): '$($SourceSnapshot.ECP_InternalUrl)'" -ForegroundColor DarkYellow
+    }
+    # EWS
+    if(Test-IsAbsoluteHttpUrl $SourceSnapshot.EWS_InternalUrl -and -not(Test-ServerBoundUrl -Url $SourceSnapshot.EWS_InternalUrl -SourceServerName $TargetServer)){
+        Get-WebServicesVirtualDirectory -Server $TargetServer|Set-WebServicesVirtualDirectory -InternalUrl $SourceSnapshot.EWS_InternalUrl -ExternalUrl $SourceSnapshot.EWS_ExternalUrl -Confirm:$false
+    }
+    else{
+        Write-Host "Skip EWS InternalUrl (invalid or serverbound): '$($SourceSnapshot.EWS_InternalUrl)'" -ForegroundColor DarkYellow
+    } 
+    # EAS
+    if(Test-IsAbsoluteHttpUrl $SourceSnapshot.EAS_InternalUrl -and -not(Test-ServerBoundUrl -Url $SourceSnapshot.EAS_InternalUrl -SourceServerName $TargetServer)){
+        Get-ActiveSyncVirtualDirectory -Server $TargetServer|Set-ActiveSyncVirtualDirectory -InternalUrl $SourceSnapshot.EAS_InternalUrl -ExternalUrl $SourceSnapshot.EAS_ExternalUrl -Confirm:$false
+    }
+    else{
+        Write-Host "Skip EAS InternalUrl (invalid or serverbound): '$($SourceSnapshot.EAS_InternalUrl)'" -ForegroundColor DarkYellow
+    }
+    # OAB
+    if(Test-IsAbsoluteHttpUrl $SourceSnapshot.OAB_InternalUrl -and -not(Test-ServerBoundUrl -Url $SourceSnapshot.OAB_InternalUrl -SourceServerName $TargetServer)){
+        Get-OabVirtualDirectory -Server $TargetServer|Set-OabVirtualDirectory -InternalUrl $SourceSnapshot.OAB_InternalUrl -ExternalUrl $SourceSnapshot.OAB_ExternalUrl -Confirm:$false
+    }
+    else{
+        Write-Host "Skip OAB InternalUrl (invalid or serverbound): '$($SourceSnapshot.OAB_InternalUrl)'" -ForegroundColor DarkYellow
+    } 
+    # MAPI
+    if(Test-IsAbsoluteHttpUrl $SourceSnapshot.MAPI_InternalUrl -and -not(Test-ServerBoundUrl -Url $SourceSnapshot.MAPI_InternalUrl -SourceServerName $TargetServer)){
+        Get-MapiVirtualDirectory -Server $TargetServer|Set-MapiVirtualDirectory -InternalUrl $SourceSnapshot.MAPI_InternalUrl -ExternalUrl $SourceSnapshot.MAPI_ExternalUrl -Confirm:$false
+    }
+    else{
+        Write-Host "Skip MAPI InternalUrl (invalid or serverbound): '$($SourceSnapshot.MAPI_InternalUrl)'" -ForegroundColor DarkYellow
+    } 
     # Outlook Anywhere
-    if ($PSCmdlet.ShouldProcess($TargetServer,'Set-OutlookAnywhere')) {
-        try {
-            $ext = $SourceSnapshot.OutlookAnywhere_ExternalHostname
-            $int = $SourceSnapshot.OutlookAnywhere_InternalHostname
-            $params = @{}
-            if (-not [string]::IsNullOrWhiteSpace($ext)) { $params['ExternalHostname'] = $ext }
-            if (-not [string]::IsNullOrWhiteSpace($int)) { $params['InternalHostname'] = $int }
-            if ($params.Count -gt 0) {
-                Get-OutlookAnywhere -Server $TargetServer -ErrorAction Stop |
-                  Set-OutlookAnywhere @params -ExternalClientsRequireSsl:$true -InternalClientsRequireSsl:$true -ExternalClientAuthenticationMethod 'Negotiate' -Confirm:$false
-            }
-        } catch {}
-    }
+    $ext=$SourceSnapshot.OutlookAnywhere_ExternalHostname;$int=$SourceSnapshot.OutlookAnywhere_InternalHostname;if(-not[string]::IsNullOrWhiteSpace($ext)-or -not[string]::IsNullOrWhiteSpace($int)){
+        Get-OutlookAnywhere -Server $TargetServer|Set-OutlookAnywhere -ExternalHostname $ext -InternalHostname $int -ExternalClientsRequireSsl:$true -InternalClientsRequireSsl:$true -ExternalClientAuthenticationMethod 'Negotiate' -Confirm:$false
+    } 
     # AutoDiscover
-    if ($PSCmdlet.ShouldProcess($TargetServer,'Set-ClientAccessService')) {
-        try {
-            $ad = $SourceSnapshot.AutoDiscoverServiceInternalUri
-            if (Test-IsAbsoluteHttpUrl $ad) {
-                Get-ClientAccessService -Identity $TargetServer -ErrorAction Stop |
-                  Set-ClientAccessService -AutoDiscoverServiceInternalUri $ad -Confirm:$false
-            } else {
-                Write-Host "Skip AutoDiscoverServiceInternalUri (invalid/empty): '$ad'" -ForegroundColor DarkYellow
-            }
-        } catch {}
+    $ad=$SourceSnapshot.AutoDiscoverServiceInternalUri;
+    if(Test-IsAbsoluteHttpUrl $ad){
+        Get-ClientAccessService -Identity $TargetServer|Set-ClientAccessService -AutoDiscoverServiceInternalUri $ad -Confirm:$false
+    }
+    else{
+        Write-Host "Skip AutoDiscoverServiceInternalUri (invalid/empty): '$ad'" -ForegroundColor DarkYellow
     }
 }
+
 $servers=Get-ExchangeServerVersions
 $pair=Resolve-Servers -servers $servers -src $SourceVersion -tgt $TargetVersion
 
 # CAS URL Compare/Apply
-if ($CompareCasUrls -or $ApplyCasUrls) {
-    $srcCas = if ($PSBoundParameters.ContainsKey('SourceCasServer') -and $SourceCasServer) { $SourceCasServer } else { $pair.Source }
-    $tgtCas = if ($PSBoundParameters.ContainsKey('TargetCasServer') -and $TargetCasServer) { $TargetCasServer } else { $pair.Target }
-
-    Write-Host "`nCAS URL SNAPSHOTS:" -ForegroundColor Yellow
-    $srcSnap = Get-CasUrlSnapshot -Server $srcCas
-    $tgtSnap = Get-CasUrlSnapshot -Server $tgtCas
-
-    $casDiffs = Compare-CasUrls -Source $srcSnap -Target $tgtSnap -SourceServerName $srcCas -TargetServerName $tgtCas -CasShowAll:$CasShowAll
-    if (@($casDiffs).Count -gt 0) {
-        $casDiffs | Format-Table Property, SourceValue, TargetValue, Status, Note -AutoSize | Out-Host
-        if ($Approve -and $ApplyCasUrls) {
-            Apply-CasUrls -TargetServer $tgtCas -SourceSnapshot $srcSnap
-            Write-Host "Applied CAS/VD URLs from '$srcCas' to '$tgtCas'." -ForegroundColor Green
-        }
-    } else {
-        Write-Host "No CAS/VD URL differences between '$srcCas' and '$tgtCas'." -ForegroundColor DarkGreen
+if($CompareCasUrls -or $ApplyCasUrls){
+    $srcCas=if($PSBoundParameters.ContainsKey('SourceCasServer')-and$SourceCasServer){
+        $SourceCasServer
+    }else{
+        $pair.Source
+    };
+    $tgtCas=if($PSBoundParameters.ContainsKey('TargetCasServer')-and$TargetCasServer){
+        $TargetCasServer
     }
+    else{
+        $pair.Target
+    };Write-Host "`nCAS URL SNAPSHOTS:" -ForegroundColor Yellow;$srcSnap=Get-CasUrlSnapshot -Server $srcCas;$tgtSnap=Get-CasUrlSnapshot -Server $tgtCas;$casDiffs=Compare-CasUrls -Source $srcSnap -Target $tgtSnap -SourceServerName $srcCas -TargetServerName $tgtCas -CasShowAll:$CasShowAll;
+    if(@($casDiffs).Count -gt 0){$casDiffs|Format-Table Property,SourceValue,TargetValue,Status,Note -AutoSize|Out-Host;
+        if($Approve -and $ApplyCasUrls){
+            Apply-CasUrls -TargetServer $tgtCas -SourceSnapshot $srcSnap;Write-Host "Applied CAS/VD URLs from '$srcCas' to '$tgtCas'." -ForegroundColor Green
+        }
+    }
+    else{
+        Write-Host "No CAS/VD URL differences between '$srcCas' and '$tgtCas'." -ForegroundColor DarkGreen
+    };
     return
 }
 if(-not $pair){ Write-Error "Could not find both required versions: source=$SourceVersion, target=$TargetVersion."; return }
