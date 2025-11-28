@@ -13,7 +13,7 @@
     shows details in GridView with an export option. DaysUntilExpiry is an integer (no decimals).
     Export goes to the script folder.
 .EXAMPLE
-    .\Exchange-GetDefaultSMTPM.ps1 
+    .\Exchange-GetDefaultSMTP.ps1 
     Skript wird ohne Attribute ausgeführt.
 .NOTES
     Exchange Module is needed
