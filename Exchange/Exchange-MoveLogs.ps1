@@ -1,3 +1,4 @@
+
 <#
 .SYNOPSIS
     Script Name:    Exchange MoveLogs
@@ -5,11 +6,12 @@
     Created on:     01.01.2023
     Changed on:     03.12.2025
     Created by:     KSB
-    Changed by:     Eidolf
+    Changed by:     Eidolf (with help of Copilot AI)
     Company:        ER-Netz
-    Version:        1.1.0
+    Version:        1.2.0
 .DESCRIPTION
-    This script will move all of the configurable logs for Exchange 2013 and upward from it's default place to a specified log path.
+    This script will move all of the configurable logs for Exchange 2013 and upward from its default place to a specified log path.
+    Version 1.2.0 adds Dry-Run mode, logging, and improved symlink handling.
 .EXAMPLE
     .\Exchange-MoveLogs.ps1 
     Script is used without attributes
@@ -17,53 +19,194 @@
     
 #>
 
-# Get the name of the local computer and  set it to a variable for use later on. 
+# -------------------------------
+# Global Variables
+# -------------------------------
+$ExchangeServerName = $env:COMPUTERNAME
+$LogPath = Read-Host "Set destination log path (e.g., L:\Logs)"
+$DryRunInput = Read-Host "Dry-Run only? (Y/N)"
+$DryRun = ($DryRunInput -eq "Y")
+$LogFile = "$LogPath\ExchangeMoveLogs_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 
-$exchangeservername = $env:computername
-$Logpath = read-host "Set destination log path / Ziel-Logpfad eingeben z.B. (L:\Logs)"
+Start-Transcript -Path $LogFile
 
-# Move the standard log files for  the TransportService to the same path on the L: drive that they were on C:  
+# -------------------------------
+# Helper: Execute or Simulate
+# -------------------------------
+function Execute-Action {
+    param($ActionDescription, [ScriptBlock]$Action)
 
-Set-TransportService -Identity $exchangeservername -ConnectivityLogPath ("$Logpath"+"\Hub\Connectivity") -MessageTrackingLogPath ("$Logpath"+"\MessageTracking") -IrmLogPath ("$Logpath"+"\IRMLogs") -ActiveUserStatisticsLogPath ("$Logpath"+"\Hub\ActiveUsersStats") -ServerStatisticsLogPath ("$Logpath"+"\Hub\ServerStats") -ReceiveProtocolLogPath ("$Logpath"+"\Hub\ProtocolLog\SmtpReceive") -RoutingTableLogPath ("$Logpath"+"\Hub\Routing") -SendProtocolLogPath ("$Logpath"+"\Hub\ProtocolLog\SmtpSend") -QueueLogPath ("$Logpath"+"\Hub\QueueViewer") -WlmLogPath ("$Logpath"+"\Hub\WLM") -PipelineTracingPath ("$Logpath"+"\Hub\PipelineTracing") -AgentLogPath ("$Logpath"+"\Hub\AgentLog")
+    if ($DryRun) {
+        Write-Host "[DRY-RUN] $ActionDescription"
+    } else {
+        Write-Host $ActionDescription
+        & $Action
+    }
+}
 
-# move the path for  the PERFMON logs from the C: drive to the L: drive 
+# -------------------------------
+# Function: Move TransportService Logs
+# -------------------------------
+function Set-TransportServicePaths {
+    param($ServerName, $BasePath)
 
-logman -stop ExchangeDiagnosticsDailyPerformanceLog
+    Execute-Action "Updating TransportService log paths for $ServerName..." {
+        Set-TransportService -Identity $ServerName `
+            -ConnectivityLogPath "$BasePath\Hub\Connectivity" `
+            -MessageTrackingLogPath "$BasePath\MessageTracking" `
+            -IrmLogPath "$BasePath\IRMLogs" `
+            -ActiveUserStatisticsLogPath "$BasePath\Hub\ActiveUsersStats" `
+            -ServerStatisticsLogPath "$BasePath\Hub\ServerStats" `
+            -ReceiveProtocolLogPath "$BasePath\Hub\ProtocolLog\SmtpReceive" `
+            -RoutingTableLogPath "$BasePath\Hub\Routing" `
+            -SendProtocolLogPath "$BasePath\Hub\ProtocolLog\SmtpSend" `
+            -QueueLogPath "$BasePath\Hub\QueueViewer" `
+            -WlmLogPath "$BasePath\Hub\WLM" `
+            -PipelineTracingPath "$BasePath\Hub\PipelineTracing" `
+            -AgentLogPath "$BasePath\Hub\AgentLog" `
+            -JournalLogPath "$BasePath\JournalLog" `
+            -TransportHttpLogPath "$BasePath\Hub\TransportHttp"
+    }
+}
 
-logman -update ExchangeDiagnosticsDailyPerformanceLog -o ("$Logpath"+"\Diagnostics\DailyPerformanceLogs\ExchangeDiagnosticsDailyPerformanceLog")
+# -------------------------------
+# Function: Move FrontendTransportService Logs
+# -------------------------------
+function Set-FrontendTransportServicePaths {
+    param($ServerName, $BasePath)
 
-logman -start ExchangeDiagnosticsDailyPerformanceLog
+    Execute-Action "Updating FrontendTransportService log paths..." {
+        Set-FrontendTransportService -Identity $ServerName `
+            -AgentLogPath "$BasePath\FrontEnd\AgentLog" `
+            -ConnectivityLogPath "$BasePath\FrontEnd\Connectivity" `
+            -ReceiveProtocolLogPath "$BasePath\FrontEnd\ProtocolLog\SmtpReceive" `
+            -SendProtocolLogPath "$BasePath\FrontEnd\ProtocolLog\SmtpSend"
+    }
+}
 
-logman -stop ExchangeDiagnosticsPerformanceLog
+# -------------------------------
+# Function: Move MailboxTransportService Logs
+# -------------------------------
+function Set-MailboxTransportServicePaths {
+    param($ServerName, $BasePath)
 
-logman -update ExchangeDiagnosticsPerformanceLog -o ("$Logpath"+"\Diagnostics\PerformanceLogsToBeProcessed\ExchangeDiagnosticsPerformanceLog")
+    Execute-Action "Updating MailboxTransportService log paths..." {
+        Set-MailboxTransportService -Identity $ServerName `
+            -ConnectivityLogPath "$BasePath\Mailbox\Connectivity" `
+            -MailboxDeliveryAgentLogPath "$BasePath\Mailbox\AgentLog\Delivery" `
+            -MailboxSubmissionAgentLogPath "$BasePath\Mailbox\AgentLog\Submission" `
+            -ReceiveProtocolLogPath "$BasePath\Mailbox\ProtocolLog\SmtpReceive" `
+            -SendProtocolLogPath "$BasePath\Mailbox\ProtocolLog\SmtpSend" `
+            -PipelineTracingPath "$BasePath\Mailbox\PipelineTracing"
+    }
+}
 
-logman -start ExchangeDiagnosticsPerformanceLog
+# -------------------------------
+# Function: Move EdgeSyncService Logs
+# -------------------------------
+function Set-EdgeSyncServicePath {
+    param($BasePath)
 
-# Get the details on the EdgeSyncServiceConfig and  store them in a variable for use in setting the path 
+    Execute-Action "Updating EdgeSyncService log path..." {
+        $EdgeSyncServiceConfigVAR = Get-EdgeSyncServiceConfig
+        Set-EdgeSyncServiceConfig -Identity $EdgeSyncServiceConfigVAR.Identity -LogPath "$BasePath\EdgeSync"
+    }
+}
 
-$EdgeSyncServiceConfigVAR = Get-EdgeSyncServiceConfig 
+# -------------------------------
+# Function: Move IMAP and POP3 Logs
+# -------------------------------
+function Set-ImapPopPaths {
+    param($BasePath)
 
-# Move the Log Path using the variable we got 
+    Execute-Action "Updating IMAP and POP3 log paths..." {
+        Set-ImapSettings -LogFileLocation "$BasePath\Imap4"
+        Set-PopSettings -LogFileLocation "$BasePath\Pop3"
+    }
+}
 
-Set-EdgeSyncServiceConfig -Identity $EdgeSyncServiceConfigVAR.Identity -LogPath ("$Logpath"+"\EdgeSync")
+# -------------------------------
+# Function: Move MailboxServer Logs
+# -------------------------------
+function Set-MailboxServerPaths {
+    param($ServerName, $BasePath)
 
-# Move the standard log files for  the FrontEndTransportService to the same path on the L: drive that they were on C: 
+    Execute-Action "Updating MailboxServer log paths..." {
+        Set-MailboxServer -Identity $ServerName `
+            -CalendarRepairLogPath "$BasePath\Calendar Repair Assistant" `
+            -MigrationLogFilePath "$BasePath\Managed Folder Assistant"
+    }
+}
 
-Set-FrontendTransportService  -Identity $exchangeservername -AgentLogPath ("$Logpath"+"\FrontEnd\AgentLog") -ConnectivityLogPath ("$Logpath"+"\FrontEnd\Connectivity") -ReceiveProtocolLogPath ("$Logpath"+"\FrontEnd\ProtocolLog\SmtpReceive") -SendProtocolLogPath ("$Logpath"+"\FrontEnd\ProtocolLog\SmtpSend")
+# -------------------------------
+# Function: Move Perfmon Logs
+# -------------------------------
+function Move-PerfmonLogs {
+    param($BasePath)
 
-# MOve the log path for  the IMAP server 
+    Execute-Action "Updating Perfmon log paths..." {
+        logman -stop ExchangeDiagnosticsDailyPerformanceLog
+        logman -update ExchangeDiagnosticsDailyPerformanceLog -o "$BasePath\Diagnostics\DailyPerformanceLogs\ExchangeDiagnosticsDailyPerformanceLog"
+        logman -start ExchangeDiagnosticsDailyPerformanceLog
 
-Set-ImapSettings -LogFileLocation ("$Logpath"+"\Imap4")
+        logman -stop ExchangeDiagnosticsPerformanceLog
+        logman -update ExchangeDiagnosticsPerformanceLog -o "$BasePath\Diagnostics\PerformanceLogsToBeProcessed\ExchangeDiagnosticsPerformanceLog"
+        logman -start ExchangeDiagnosticsPerformanceLog
+    }
+}
 
-# Move the logs for  the MailBoxServer 
+# -------------------------------
+# Function: Create Symlinks for Non-Configurable Paths
+# -------------------------------
+function Create-SpecialLogSymlinks {
+    param($BasePath)
 
-Set-MailboxServer -Identity $exchangeservername -CalendarRepairLogPath ("$Logpath"+"\Calendar Repair Assistant") -MigrationLogFilePath  ("$Logpath"+"\Managed Folder Assistant")
+    $TransportService = Get-TransportService -Identity $ExchangeServerName
+    $SpecialPaths = @{
+        "LatencyLog"  = $TransportService.LatencyLogPath
+        "GeneralLog"  = $TransportService.GeneralLogPath
+    }
 
-# Move the standard log files for  the MailboxTransportService to the same path on the L: drive that they were on C: 
+    Execute-Action "Stopping MSExchangeTransport service..." {
+        Stop-Service MSExchangeTransport
+    }
 
-Set-MailboxTransportService -Identity $exchangeservername -ConnectivityLogPath ("$Logpath"+"\Mailbox\Connectivity") -MailboxDeliveryAgentLogPath ("$Logpath"+"\Mailbox\AgentLog\Delivery") -MailboxSubmissionAgentLogPath ("$Logpath"+"\Mailbox\AgentLog\Submission") -ReceiveProtocolLogPath ("$Logpath"+"\Mailbox\ProtocolLog\SmtpReceive") -SendProtocolLogPath ("$Logpath"+"\Mailbox\ProtocolLog\SmtpSend") -PipelineTracingPath ("$Logpath"+"\Mailbox\PipelineTracing")
+    foreach ($Name in $SpecialPaths.Keys) {
+        $OldPath = $SpecialPaths[$Name]
+        $NewPath = Join-Path $BasePath "Hub\$Name"
 
-# Move the log path for  the POP3 server 
+        Write-Host "Processing ${Name}:"
+        Write-Host "  Old Path: $OldPath"
+        Write-Host "  New Path: $NewPath"
 
-Set-PopSettings -LogFileLocation ("$Logpath"+"\Pop3")
+        Execute-Action "Creating junction for ${Name}..." {
+            if (!(Test-Path $NewPath)) {
+                New-Item -ItemType Directory -Path $NewPath | Out-Null
+            }
+
+            if ((Test-Path $OldPath) -and (!(Get-Item $OldPath).Attributes.ToString().Contains("ReparsePoint"))) {
+                Rename-Item $OldPath "${OldPath}_old"
+                New-Item -ItemType Junction -Path $OldPath -Target $NewPath | Out-Null
+            }
+        }
+    }
+
+    Execute-Action "Starting MSExchangeTransport service..." {
+        Start-Service MSExchangeTransport
+    }
+}
+
+# -------------------------------
+# Main Execution
+# -------------------------------
+Set-TransportServicePaths $ExchangeServerName $LogPath
+Set-FrontendTransportServicePaths $ExchangeServerName $LogPath
+Set-MailboxTransportServicePaths $ExchangeServerName $LogPath
+Set-EdgeSyncServicePath $LogPath
+Set-ImapPopPaths $LogPath
+Set-MailboxServerPaths $ExchangeServerName $LogPath
+Move-PerfmonLogs $LogPath
+Create-SpecialLogSymlinks $LogPath
+
+Write-Host "All log paths have been successfully updated!"
+Stop-Transcript
