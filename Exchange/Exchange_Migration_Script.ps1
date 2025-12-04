@@ -7,7 +7,7 @@
         Created by:     Eidolf (with help of Copilot AI)
         Changed by:     Eidolf (with help of Copilot AI)
         Company:        ER-Netz
-        Version:        1.2.0
+        Version:        1.2.1
     .DESCRIPTION
         A Script for migrating Exchange Server 2016 to Server 2019/SE. Primary for Database creation and move and comparing settings between Servers.
         Version 1.0.0 is a working Version for Database Migration and to check settings.
@@ -119,15 +119,15 @@
         ============================================================================
     .NOTES
         Exchange Module is needed
+
+        Hinweis – Servergebundene URLs
+        - URLs, deren Host den Quell-Servernamen enthält, werden beim Apply NICHT automatisch übernommen.
+        Stattdessen erscheint ein Hinweis im Vergleich. Anpassung manuell (oder per zentralem FQDN) empfohlen.
+
+        Zusatzoptionen (CAS)
+        - -CasShowAll   Zeigt im Vergleich alle Eigenschaften inkl. Gleichständen (Status: Equal / Equal (BothEmpty)).
     .LINK
 
-
-Hinweis – Servergebundene URLs
- - URLs, deren Host den Quell-Servernamen enthält, werden beim Apply NICHT automatisch übernommen.
-   Stattdessen erscheint ein Hinweis im Vergleich. Anpassung manuell (oder per zentralem FQDN) empfohlen.
-
-Zusatzoptionen (CAS)
- - -CasShowAll   Zeigt im Vergleich alle Eigenschaften inkl. Gleichständen (Status: Equal / Equal (BothEmpty)).
 #>
 
 
@@ -165,9 +165,7 @@ param(
     # Review/exports
     [switch]$Interactive,
     [switch]$Approve,
-[string]$FallbackTargetDb,
-[switch]$KeepCsv,
-[switch]$AutoStart,
+[string]$ForceTargetDb,
     [string]$ExportPlan,
     [string]$ExportDiffs,
 
@@ -451,52 +449,29 @@ function Apply-DbSettings([string]$targetDb,[object[]]$diffRows){
     } 
 }
 
-function Queue-ArbitrationMigrationBatch([string]$batchPrefix,[string]$NotificationEmails,[int]$BadItemLimit,[switch]$SplitArbitrationBySourceDb,[string]$TargetDb,[switch]$AutoStart,[switch]$KeepCsv){
+function Queue-ArbitrationMigrationBatch([string]$batchPrefix,[string]$NotificationEmails,[int]$BadItemLimit,[switch]$SplitArbitrationBySourceDb,[string]$TargetDb,[switch]$AutoStart,[switch]$KeepCsv,[string]$ForceTargetDb){
     $arbMailboxes=Get-Mailbox -Arbitration | Where-Object { $_.ServerName -ne $pair.Target };
     if($arbMailboxes.Count -eq 0){ Write-Host "No arbitration mailboxes found." -ForegroundColor DarkYellow; return }
-    if($SplitArbitrationBySourceDb){
-        $groups=$arbMailboxes | Group-Object Database;
-        foreach($grp in $groups){
-            if($grp.Count -eq 0){ continue }
-            $dbName=$grp.Name;
-            $safeDb=$dbName -replace '[^a-zA-Z0-9]','';
-            $batchName=("{0}_{1}_{2:yyyyMMdd-HHmm}" -f $batchPrefix,$safeDb,(Get-Date));
-            $csvPath=Join-Path $env:TEMP ("{0}.csv" -f $batchName);
-            $grp.Group | Select-Object @{Name='EmailAddress';Expression={$_.PrimarySmtpAddress}} | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8;
-            $csvBytes=[System.IO.File]::ReadAllBytes($csvPath);
-            $targetDb=($plan | Where-Object { $_.SourceDb -eq $dbName }).TargetDb;
-            if(-not $targetDb){ $targetDb=$TargetDb }
-            $params=@{Name=$batchName;Local=$true;CSVData=$csvBytes;TargetDatabases=$targetDb;BadItemLimit=$BadItemLimit};
-            if($NotificationEmails){$params['NotificationEmails']=$NotificationEmails};
-            try{
-                New-MigrationBatch @params | Out-Null;
-                if($AutoStart){ Start-MigrationBatch -Identity $batchName | Out-Null }
-                Write-Host ("Created MigrationBatch '{0}' for {1} arbitration mailboxes -> '{2}'. AutoStart={3}" -f $batchName,$grp.Count,$targetDb,$AutoStart) -ForegroundColor Cyan
-            } catch{ Write-Warning "Failed to create MigrationBatch '$batchName': $($_.Exception.Message)" }
-            if(-not $KeepCsv){ Remove-Item $csvPath -Force } else { Write-Host "CSV retained at $csvPath" -ForegroundColor Yellow }
-        }
-    } else {
-        $batchName=("{0}_Arbitration_{1:yyyyMMdd-HHmm}" -f $batchPrefix,(Get-Date));
-        $csvPath=Join-Path $env:TEMP ("{0}.csv" -f $batchName);
-        $arbMailboxes | Select-Object @{Name='EmailAddress';Expression={$_.PrimarySmtpAddress}} | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8;
-        $csvBytes=[System.IO.File]::ReadAllBytes($csvPath);
-        $params=@{Name=$batchName;Local=$true;CSVData=$csvBytes;TargetDatabases=$TargetDb;BadItemLimit=$BadItemLimit};
-        if($NotificationEmails){$params['NotificationEmails']=$NotificationEmails};
-        try{
-            New-MigrationBatch @params | Out-Null;
-            if($AutoStart){ Start-MigrationBatch -Identity $batchName | Out-Null }
-            Write-Host ("Created MigrationBatch '{0}' for {1} arbitration mailboxes -> '{2}'. AutoStart={3}" -f $batchName,$arbMailboxes.Count,$TargetDb,$AutoStart) -ForegroundColor Cyan
-        } catch{ Write-Warning "Failed to create MigrationBatch '$batchName': $($_.Exception.Message)" }
-        if(-not $KeepCsv){ Remove-Item $csvPath -Force } else { Write-Host "CSV retained at $csvPath" -ForegroundColor Yellow }
-    }
+    $targetDb=if($ForceTargetDb){$ForceTargetDb}else{$TargetDb}
+    $batchName=("{0}_Arbitration_{1:yyyyMMdd-HHmm}" -f $batchPrefix,(Get-Date));
+    $csvPath=Join-Path $env:TEMP ("{0}.csv" -f $batchName);
+    $arbMailboxes | Select-Object @{Name='EmailAddress';Expression={$_.PrimarySmtpAddress}} | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8;
+    $csvBytes=[System.IO.File]::ReadAllBytes($csvPath);
+    $params=@{Name=$batchName;Local=$true;CSVData=$csvBytes;TargetDatabases=$targetDb;ArchiveTargetDatabases=$targetDb;BadItemLimit=$BadItemLimit};
+    if($NotificationEmails){$params['NotificationEmails']=$NotificationEmails};
+    try{
+        New-MigrationBatch @params | Out-Null;
+        if($AutoStart){ Start-MigrationBatch -Identity $batchName | Out-Null }
+        Write-Host ("Created MigrationBatch '{0}' for {1} arbitration mailboxes -> '{2}'. AutoStart={3}" -f $batchName,$arbMailboxes.Count,$targetDb,$AutoStart) -ForegroundColor Cyan
+    } catch{ Write-Warning "Failed to create MigrationBatch '$batchName': $($_.Exception.Message)" }
+    if(-not $KeepCsv){ Remove-Item $csvPath -Force } else { Write-Host "CSV retained at $csvPath" -ForegroundColor Yellow }
 }
-function Queue-RegularMigrationBatches([string]$batchPrefix,[string]$NotificationEmails,[int]$BadItemLimit,[switch]$AutoStart,[switch]$KeepCsv,[string]$FallbackTargetDb){
+function Queue-RegularMigrationBatches([string]$batchPrefix,[string]$NotificationEmails,[int]$BadItemLimit,[switch]$AutoStart,[switch]$KeepCsv,[string]$FallbackTargetDb,[string]$ForceTargetDb){
     $mailboxes=Get-Mailbox -ResultSize Unlimited | Where-Object { $_.RecipientTypeDetails -in @('UserMailbox','SharedMailbox','RoomMailbox','EquipmentMailbox') -and $_.ServerName -ne $pair.Target };
     if($mailboxes.Count -eq 0){ Write-Host "No regular mailboxes found." -ForegroundColor DarkYellow; return }
     $map=@();
     foreach($mbx in $mailboxes){
-        $srcDb=$mbx.Database;
-        $targetDb=($plan | Where-Object { $_.SourceDb -eq $srcDb }).TargetDb;
+        $targetDb=if($ForceTargetDb){$ForceTargetDb}else{($plan | Where-Object { $_.SourceDb -eq $mbx.Database }).TargetDb};
         if(-not $targetDb){ $targetDb=$FallbackTargetDb }
         $map += [pscustomobject]@{ Mailbox=$mbx; Type=$mbx.RecipientTypeDetails; TargetDb=$targetDb }
     }
@@ -512,7 +487,7 @@ function Queue-RegularMigrationBatches([string]$batchPrefix,[string]$Notificatio
         $csvPath=Join-Path $env:TEMP ("{0}.csv" -f $batchName);
         $grp.Group | ForEach-Object { $_.Mailbox } | Select-Object @{Name='EmailAddress';Expression={$_.PrimarySmtpAddress}} | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8;
         $csvBytes=[System.IO.File]::ReadAllBytes($csvPath);
-        $params=@{Name=$batchName;Local=$true;CSVData=$csvBytes;TargetDatabases=$targetDb;BadItemLimit=$BadItemLimit};
+        $params=@{Name=$batchName;Local=$true;CSVData=$csvBytes;TargetDatabases=$targetDb;ArchiveTargetDatabases=$targetDb;BadItemLimit=$BadItemLimit};
         if($NotificationEmails){$params['NotificationEmails']=$NotificationEmails};
         try{
             New-MigrationBatch @params | Out-Null;
@@ -768,8 +743,8 @@ if($IncludeDbs -and $IncludeDbs.Count -gt 0){ $sourceDbs=$sourceDbs | Where-Obje
 
 $plan = foreach($db in $sourceDbs){ $newName=New-DbNameFromOld -oldName $db.Name; $paths=Build-TargetPaths -dbName $newName -oldEdb $db.EdbFilePath -oldLog $db.LogFolderPath; $dbOk=Test-RemoteFolder -server $pair.Target -path $paths.DbFolder; $logOk=Test-RemoteFolder -server $pair.Target -path $paths.LogFolder; [pscustomobject]@{ SourceDb=$db.Name; OldEdb=$db.EdbFilePath; OldLog=$db.LogFolderPath; TargetDb=$newName; TargetEdb=$paths.EdbFile; TargetDbDir=$paths.DbFolder; TargetLog=$paths.LogFolder; DbDirExists=[bool]$dbOk; LogDirExists=[bool]$logOk } }
 
-if(-not $QueueMoves){ # PLAN suppressed for QueueMoves
-}
+Write-Host "`nPLAN (review before execution):" -ForegroundColor Yellow
+$plan | Select SourceDb,OldEdb,OldLog,TargetDb,TargetEdb,TargetDbDir,TargetLog,DbDirExists,LogDirExists | Format-Table -AutoSize | Out-Host
 if($ExportPlan){ try{ $plan | Export-Csv -Path $ExportPlan -NoTypeInformation -Encoding UTF8; Write-Host "Plan exported to $ExportPlan" -ForegroundColor DarkGreen }catch{ Write-Warning "Export failed: $($_.Exception.Message)" } }
 
 if($Interactive){ Write-Host "`nInteractive mode: edit target paths (ENTER to keep)." -ForegroundColor Cyan; $adjusted=@(); foreach($item in $plan){ Write-Host "`nDB: $($item.SourceDb) -> $($item.TargetDb)" -ForegroundColor Cyan; $nd=Read-Host ("Target DB folder   [{0}]" -f $item.TargetDbDir); $nl=Read-Host ("Target LOG folder  [{0}]" -f $item.TargetLog); $ne=Read-Host ("Target EDB file    [{0}]" -f $item.TargetEdb); if($nd){$item.TargetDbDir=$nd}; if($nl){$item.TargetLog=$nl}; if($ne){$item.TargetEdb=$ne}; $adjusted+=$item }; $plan=$adjusted; Write-Host "`nAdjusted PLAN:" -ForegroundColor Yellow; $plan | Select SourceDb,TargetDb,TargetEdb,TargetDbDir,TargetLog | Format-Table -AutoSize | Out-Host }
@@ -797,52 +772,17 @@ if(-not $Approve -and -not $CompareSettings){
     Write-Host "`nNo changes executed. Re-run with -Approve and/or -CompareSettings when ready." -ForegroundColor DarkYellow; return
 }
 
-foreach($item in $plan){
-    $paths=[pscustomobject]@{
-        DbFolder=$item.TargetDbDir; LogFolder=$item.TargetLog; EdbFile=$item.TargetEdb
-    };
-    if($Approve -and ($PrepareFolders -or $CreateDatabases)){
-        Prepare-TargetFolders -targetServer $pair.Target -paths $paths;
-        if($CreateDatabases){ 
-            Create-NewMailboxDatabase -targetServer $pair.Target -dbName $item.TargetDb -paths $paths
-        } 
-    } 
-}
+foreach($item in $plan){ $paths=[pscustomobject]@{ DbFolder=$item.TargetDbDir; LogFolder=$item.TargetLog; EdbFile=$item.TargetEdb }; if($Approve -and ($PrepareFolders -or $CreateDatabases)){ Prepare-TargetFolders -targetServer $pair.Target -paths $paths; if($CreateDatabases){ Create-NewMailboxDatabase -targetServer $pair.Target -dbName $item.TargetDb -paths $paths } } }
 
-if($CompareSettings -or $ApplySettings){
-    $props=Expand-SettingsList -scope $SettingsScope; $allDiffs=@(); Write-Host "`nDB SETTINGS DIFFS:" -ForegroundColor Yellow;
-    foreach($item in $plan){
-        $exists = -not (Ensure-UniqueDbName -name $item.TargetDb);
-        if(-not $exists){
-            Write-Host "Target DB '$($item.TargetDb)' not found (create first)." -ForegroundColor DarkYellow; continue
-        };
-        $diff=Compare-DbSettings -sourceDb $item.SourceDb -targetDb $item.TargetDb -properties $props; $diffList=@($diff);
-        if($diffList.Count -gt 0){
-            $diffList | Format-Table * -AutoSize | Out-Host; $allDiffs += $diffList;
-            if($Approve -and $ApplySettings){
-                Apply-DbSettings -targetDb $item.TargetDb -diffRows $diffList
-            }
-        }
-        else {
-            Write-Host "No differences for '$($item.TargetDb)'." -ForegroundColor DarkGreen
-        }
-    };
-    if($ExportDiffs -and @($allDiffs).Count -gt 0){
-        try{ $allDiffs | Export-Csv -Path $ExportDiffs -NoTypeInformation -Encoding UTF8; Write-Host "Diffs exported to $ExportDiffs" -ForegroundColor DarkGreen
-        }
-        catch{
-            Write-Warning "Export diffs failed: $($_.Exception.Message)" 
-        } 
-    } 
-}
+if($CompareSettings -or $ApplySettings){ $props=Expand-SettingsList -scope $SettingsScope; $allDiffs=@(); Write-Host "`nDB SETTINGS DIFFS:" -ForegroundColor Yellow; foreach($item in $plan){ $exists = -not (Ensure-UniqueDbName -name $item.TargetDb); if(-not $exists){ Write-Host "Target DB '$($item.TargetDb)' not found (create first)." -ForegroundColor DarkYellow; continue }; $diff=Compare-DbSettings -sourceDb $item.SourceDb -targetDb $item.TargetDb -properties $props; $diffList=@($diff); if($diffList.Count -gt 0){ $diffList | Format-Table * -AutoSize | Out-Host; $allDiffs += $diffList; if($Approve -and $ApplySettings){ Apply-DbSettings -targetDb $item.TargetDb -diffRows $diffList } } else { Write-Host "No differences for '$($item.TargetDb)'." -ForegroundColor DarkGreen } }; if($ExportDiffs -and @($allDiffs).Count -gt 0){ try{ $allDiffs | Export-Csv -Path $ExportDiffs -NoTypeInformation -Encoding UTF8; Write-Host "Diffs exported to $ExportDiffs" -ForegroundColor DarkGreen }catch{ Write-Warning "Export diffs failed: $($_.Exception.Message)" } } }
 
 if($Approve -and $QueueMoves){
     if($Arbitration){
         $targetDb = ($plan | Where-Object { $_.SourceDb -like '*Verwaltung*' }).TargetDb;
         if(-not $targetDb){ $targetDb=$FallbackTargetDb }
-        Queue-ArbitrationMigrationBatch -batchPrefix $BatchNamePrefix -NotificationEmails $NotifyEmail -BadItemLimit $BadItemLimit -TargetDb $targetDb -SplitArbitrationBySourceDb:$SplitArbitrationBySourceDb -AutoStart:$AutoStart -KeepCsv:$KeepCsv;
+        Queue-ArbitrationMigrationBatch -batchPrefix $BatchNamePrefix -NotificationEmails $NotifyEmail -BadItemLimit $BadItemLimit -TargetDb $targetDb -SplitArbitrationBySourceDb:$SplitArbitrationBySourceDb -AutoStart:$AutoStart -KeepCsv:$KeepCsv -ForceTargetDb $ForceTargetDb;
     } else {
-        Queue-RegularMigrationBatches -batchPrefix $BatchNamePrefix -NotificationEmails $NotifyEmail -BadItemLimit $BadItemLimit -AutoStart:$AutoStart -KeepCsv:$KeepCsv -FallbackTargetDb $FallbackTargetDb;
+        Queue-RegularMigrationBatches -batchPrefix $BatchNamePrefix -NotificationEmails $NotifyEmail -BadItemLimit $BadItemLimit -AutoStart:$AutoStart -KeepCsv:$KeepCsv -FallbackTargetDb $FallbackTargetDb -ForceTargetDb $ForceTargetDb;
     }
 }
 Write-Host "
